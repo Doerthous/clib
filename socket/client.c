@@ -1,7 +1,8 @@
 ﻿#include <stdio.h>
+#include <string.h>
 #include "socket.h"
 
-int main(int argc, char const* argv[])
+int main(int argc, char const *argv[])
 {
 	socket_t sk;
 	int rc, wc;
@@ -20,7 +21,7 @@ int main(int argc, char const* argv[])
 		perror("socket connect failed.\n");
 	}
 
-	if (!socket_send(sk, (uint8_t*)"Hello world!", strlen("Hello world!")))
+	if (!socket_send(sk, (uint8_t *)"Hello world!", strlen("Hello world!")))
 	{
 		perror("socket send failed.\n");
 	}

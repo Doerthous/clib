@@ -1,7 +1,8 @@
 ﻿#include <stdio.h>
+#include <string.h>
 #include "socket.h"
 
-int main(int argc, char const* argv[])
+int main(int argc, char const *argv[])
 {
 	socket_t server, client;
 	int rc, wc;
