@@ -17,7 +17,7 @@
 
 // error handle
 static int __socket_errno;
-static const char* __socket_err_msg[] = {
+static const char *__socket_err_msg[] = {
 	"", // OK
 	"socket create failed.",
 	"this socket has used by a client or server, cannot bind to an address.",
@@ -27,8 +27,10 @@ static const char* __socket_err_msg[] = {
 
 /// window socket errors
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-	"winsock startup failed",
-	"winsock socket create failed",
+	"winsock startup failed.",
+	"winsock socket create failed.",
+	"remote socket closed.",
+	"connection refused",
 #endif
 };
 enum
@@ -42,10 +44,13 @@ enum
 
 ///window socket errors
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-__SKT_WIN_WSA_STARTUP_FAILED,
-__SKT_WIN_SOCKET_CREATE_FAILED,
+	__SKT_WIN_WSA_STARTUP_FAILED,
+	__SKT_WIN_SOCKET_CREATE_FAILED,
+	__SKT_WIN_REMOTE_SOCK_CLOSED,
+	__SKT_WIN_WSA_CONNECT_REFUSED,
 #endif
-__SKT_ERR_CNT,
+
+	__SKT_ERR_CNT,
 };
 enum
 {
@@ -61,7 +66,7 @@ int socket_errno()
 {
 	return __socket_errno;
 }
-const char* socket_errmsg(int err)
+const char *socket_errmsg(int err)
 {
 	assert(0 <= err && err <= __SKT_ERR_CNT);
 	return __socket_err_msg[err];
@@ -84,13 +89,39 @@ static int winsock_init()
 
 	return 1;
 }
+static void error_dump()
+{
+	int err = WSAGetLastError();
+	switch (err)
+	{
+	case 10061:
+	{
+		SET_ERROR(WIN_WSA_CONNECT_REFUSED);
+	}
+	break;
+	case 10054:
+	{
+		SET_ERROR(WIN_REMOTE_SOCK_CLOSED);
+	}
+	break;
+	default:
+	{
+		fprintf(stderr, "wsa error code: %d\n", WSAGetLastError());
+	}
+	}
+}
+#elif
+static void error_dump()
+{
+	fprintf(stderr, "could not create socket: %s(%d)\n", strerror(errno), errno);
+}
 #endif
 
 // socket interfaces
 socket_t socket_new()
 {
-	#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-		// window socket startup
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
+	// window socket startup
 	if (!winsock_inited)
 	{
 		if (!winsock_init())
@@ -100,41 +131,40 @@ socket_t socket_new()
 
 		winsock_inited = 1;
 	}
-	#endif
+#endif
 	socket_t sk;
 
 	// malloc socket memory
 	if ((sk = (socket_t)malloc(sizeof(struct socket))) == NULL)
 	{
-		//errno = 1;
+		// TODO
 		return NULL;
 	}
 
 	sk->type = __SKT_TYPE_NONE;
+	sk->recv_timeout = -1;
+	sk->accpet_timeout = -1;
+	sk->socket = 0;
 
 	// get window socket
 	if ((sk->socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
 		socket_delete(sk);
-		#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-		fprintf(stderr, "could not create socket: %d", WSAGetLastError());
-		#elif defined(__linux)
-		fprintf(stderr, "could not create socket: %s(%d)", strerror(errno), errno);
-		#endif
+		error_dump();
 		SET_ERROR(SOCKET_CREATE_FAILED);
 		return NULL;
 	}
 
-	#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	++winsock_count;
-	#endif
+#endif
 
 	return sk;
 }
 
 void socket_delete(socket_t sk)
 {
-	#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	if (sk && sk->type != __SKT_TYPE_SERVER_CLIENT)
 	{
 		closesocket(sk->socket);
@@ -147,12 +177,12 @@ void socket_delete(socket_t sk)
 			}
 		}
 	}
-	#endif
+#endif
 	free(sk);
 	sk = NULL;
 }
 
-int socket_bind(socket_t sock, const char* ip, uint16_t port)
+int socket_bind(socket_t sock, const char *ip, uint16_t port)
 {
 	assert(sock != NULL);
 	assert(ip != NULL);
@@ -160,22 +190,18 @@ int socket_bind(socket_t sock, const char* ip, uint16_t port)
 	if (sock->type != __SKT_TYPE_NONE)
 	{
 		SET_ERROR(BIND_USING_AN_USED_SOCKET);
-		return 0;
+		return -1;
 	}
 
 	sock->addr.sin_addr.s_addr = inet_addr(ip);
 	sock->addr.sin_family = AF_INET;
 	sock->addr.sin_port = htons(port);
 
-	if (bind(sock->socket, (struct sockaddr*) & sock->addr,
-		sizeof(sock->addr)) == SOCKET_ERROR)
+	if (bind(sock->socket, (struct sockaddr *)&sock->addr,
+			 sizeof(sock->addr)) == SOCKET_ERROR)
 	{
-		#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-		fprintf(stderr, "bind failed: %d", WSAGetLastError());
-		#elif defined(__linux)
-		fprintf(stderr, "bind failed: %s(%d)", strerror(errno), errno);
-		#endif
-		return 0;
+		error_dump();
+		return -1;
 	}
 
 	sock->type = __SKT_TYPE_SERVER;
@@ -183,7 +209,7 @@ int socket_bind(socket_t sock, const char* ip, uint16_t port)
 	return 1;
 }
 
-int socket_connect(socket_t sock, const char* ip, uint16_t port)
+int socket_connect(socket_t sock, const char *ip, uint16_t port)
 {
 	assert(sock != NULL);
 	assert(ip != NULL);
@@ -191,18 +217,18 @@ int socket_connect(socket_t sock, const char* ip, uint16_t port)
 	if (sock->type != __SKT_TYPE_NONE)
 	{
 		SET_ERROR(CONNECT_USING_AN_USED_SOCKET);
-		return 0;
+		return -1;
 	}
 
 	sock->addr.sin_addr.s_addr = inet_addr(ip);
 	sock->addr.sin_family = AF_INET;
 	sock->addr.sin_port = htons(port);
 
-	if (connect(sock->socket, (struct sockaddr*) & sock->addr,
-		sizeof(sock->addr)) < 0)
+	if (connect(sock->socket, (struct sockaddr *)&sock->addr,
+				sizeof(sock->addr)) < 0)
 	{
-		perror("connect error");
-		return 0;
+		error_dump();
+		return -1;
 	}
 
 	sock->type = __SKT_TYPE_CLIENT;
@@ -210,7 +236,7 @@ int socket_connect(socket_t sock, const char* ip, uint16_t port)
 	return 1;
 }
 
-int socket_send(socket_t sock, const uint8_t* data, size_t size)
+int socket_send(socket_t sock, const uint8_t *data, size_t size)
 {
 	assert(sock != NULL);
 	assert(data != NULL);
@@ -218,21 +244,21 @@ int socket_send(socket_t sock, const uint8_t* data, size_t size)
 	if (sock->type == __SKT_TYPE_NONE || sock->type == __SKT_TYPE_SERVER)
 	{
 		SET_ERROR(NONE_OR_SERVER_SOCKET);
-		return 0;
+		return -1;
 	}
 
 	if (send(sock->socket, data, size, 0) < 0)
 	{
-		perror("send error");
-		return 0;
+		error_dump();
+		return -1;
 	}
 
 	return 1;
 }
 
-size_t socket_recv(socket_t sock, uint8_t* buff, size_t size)
+int socket_recv(socket_t sock, uint8_t *buff, size_t size)
 {
-	int recv_size;
+	int rc = 0;
 
 	assert(sock != NULL);
 	assert(buff != NULL);
@@ -240,28 +266,57 @@ size_t socket_recv(socket_t sock, uint8_t* buff, size_t size)
 	if (sock->type == __SKT_TYPE_NONE || sock->type == __SKT_TYPE_SERVER)
 	{
 		SET_ERROR(NONE_OR_SERVER_SOCKET);
-		return 0;
+		return -1;
 	}
 
-	if ((recv_size = recv(sock->socket, buff, size, 0)) == SOCKET_ERROR)
+	// block recv
+	if (sock->recv_timeout < 0)
 	{
-		perror("recv failed");
-		return 0;
+	__read:
+	{
+		if ((rc = recv(sock->socket, buff, size, 0)) == SOCKET_ERROR)
+		{
+			error_dump();
+			return -1;
+		}
+	}
+	}
+	else
+	{
+		fd_set fds;
+		TIMEVAL tv;
+		FD_ZERO(&fds);
+
+		tv.tv_sec = sock->recv_timeout / 1000;
+		tv.tv_usec = sock->recv_timeout % 1000 * 1000;
+		FD_SET(sock->socket, &fds);
+
+		// TODO select < 0(-1): error
+		rc = select(sock->socket + 1, &fds, NULL, NULL, &tv);
+		if (rc > 0 && FD_ISSET(sock->socket, &fds))
+		{
+			goto __read;
+		}
+		if (rc < 0)
+		{
+			error_dump();
+			return -1;
+		}
 	}
 
-	return (size_t)recv_size;
+	return rc;
 }
 
 int socket_listen(socket_t sock, int backlog)
 {
 	assert(sock != NULL);
-	return listen(sock->socket, backlog) == 0;
+	return listen(sock->socket, backlog);
 }
 
 socket_t socket_accept(socket_t sock)
 {
-	struct sockaddr_in client;
-	socket_t csk;
+	socket_t csk = NULL;
+	struct socket cln;
 	int c;
 
 	assert(sock != NULL);
@@ -272,31 +327,55 @@ socket_t socket_accept(socket_t sock)
 		return NULL;
 	}
 
-	// malloc socket memory
-	if ((csk = (socket_t)malloc(sizeof(struct socket))) == NULL)
+	if (sock->accpet_timeout < 0)
 	{
-		//errno = 1;
-		return NULL;
-	}
-	csk->type = __SKT_TYPE_SERVER_CLIENT;
+	__accept:
+	{
+		c = sizeof(struct sockaddr_in);
+		cln.socket = accept(sock->socket, (struct sockaddr *)&cln.addr, &c);
+		if (cln.socket == INVALID_SOCKET)
+		{
+			error_dump();
+			return NULL;
+		}
 
-	c = sizeof(struct sockaddr_in);
-	csk->socket = accept(sock->socket, (struct sockaddr*) & client, &c);
-	if (csk->socket == INVALID_SOCKET)
+		// malloc socket memory
+		if ((csk = (socket_t)malloc(sizeof(struct socket))) == NULL)
+		{
+			// TODO should we close socket?
+			return NULL;
+		}
+		memcpy((void *)csk, (void *)&cln, sizeof(cln));
+		csk->type = __SKT_TYPE_SERVER_CLIENT;
+	}
+	}
+	else
 	{
-		socket_delete(csk);
-		#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-		fprintf(stderr, "accept failed: %d", WSAGetLastError());
-		#elif defined(__linux)
-		fprintf(stderr, "accept failed: %s(%d)", strerror(errno), errno);
-		#endif
-		return NULL;
+		fd_set fds;
+		TIMEVAL tv;
+		FD_ZERO(&fds);
+
+		tv.tv_sec = sock->recv_timeout / 1000;
+		tv.tv_usec = sock->recv_timeout % 1000 * 1000;
+		FD_SET(sock->socket, &fds);
+
+		// TODO select < 0(-1): error
+		c = select(sock->socket + 1, &fds, NULL, NULL, &tv);
+		if (c > 0 && FD_ISSET(sock->socket, &fds))
+		{
+			goto __accept;
+		}
+		if (c < 0)
+		{
+			error_dump();
+			return NULL;
+		}
 	}
 
 	return csk;
 }
 
-const char* socket_get_ip(socket_t sock)
+const char *socket_get_ip(socket_t sock)
 {
 	assert(sock != NULL);
 
