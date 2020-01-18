@@ -6,15 +6,21 @@
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib") //Winsock Library
 
+#elif defined(__linux)
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define SOCKET int
+
 #endif
 
 typedef struct socket
 {
     struct sockaddr_in addr;
 
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
     SOCKET socket;
-#endif
 
     int type;
 } * socket_t;

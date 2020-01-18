@@ -4,13 +4,24 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <assert.h>
+#include <string.h>
+
+#ifdef __linux
+#include <arpa/inet.h>
+
+#undef INVALID_SOCKET
+#define INVALID_SOCKET (-1)
+#undef SOCKET_ERROR
+#define SOCKET_ERROR (-1)
+#endif
 
 // error handle
 static int __socket_errno;
 static const char *__socket_err_msg[] = {
 	"", // OK
+	"socket create failed",
 
-// window socket errors
+/// window socket errors
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	"winsock startup failed",
 	"winsock socket create failed",
@@ -19,8 +30,9 @@ static const char *__socket_err_msg[] = {
 enum
 {
 	__SKT_OK = 0,
+	__SKT_SOCKET_CREATE_FAILED,
 
-//window socket errors
+///window socket errors
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	__SKT_WIN_WSA_STARTUP_FAILED,
 	__SKT_WIN_SOCKET_CREATE_FAILED,
@@ -92,16 +104,20 @@ socket_t socket_new()
 
 	sk->type = __SKT_TYPE_NONE;
 
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	// get window socket
 	if ((sk->socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
 		socket_delete(sk);
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 		fprintf(stderr, "could not create socket: %d", WSAGetLastError());
-		SET_ERROR(WIN_SOCKET_CREATE_FAILED);
+#elif defined(__linux)
+		fprintf(stderr, "could not create socket: %s(%d)", strerror(errno), errno);
+#endif
+		SET_ERROR(SOCKET_CREATE_FAILED);
 		return NULL;
 	}
 
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 	++winsock_count;
 #endif
 
@@ -142,7 +158,11 @@ int socket_bind(socket_t sock, const char *ip, uint16_t port)
 	if (bind(sock->socket, (struct sockaddr *)&sock->addr,
 			 sizeof(sock->addr)) == SOCKET_ERROR)
 	{
-		fprintf(stderr, "winsock bind failed: %d", WSAGetLastError());
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
+		fprintf(stderr, "bind failed: %d", WSAGetLastError());
+#elif defined(__linux)
+		fprintf(stderr, "bind failed: %s(%d)", strerror(errno), errno);
+#endif
 		return 0;
 	}
 
@@ -237,7 +257,11 @@ socket_t socket_accept(socket_t sock)
 	if (csk->socket == INVALID_SOCKET)
 	{
 		socket_delete(csk);
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 		fprintf(stderr, "accept failed: %d", WSAGetLastError());
+#elif defined(__linux)
+		fprintf(stderr, "accept failed: %s(%d)", strerror(errno), errno);
+#endif
 		return NULL;
 	}
 
