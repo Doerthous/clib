@@ -8,11 +8,14 @@
 
 #ifdef __linux
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #undef INVALID_SOCKET
 #define INVALID_SOCKET (-1)
 #undef SOCKET_ERROR
 #define SOCKET_ERROR (-1)
+#undef TIMEVAL
+#define TIMEVAL struct timeval
 #endif
 
 // error handle
@@ -22,7 +25,7 @@ static const char *__socket_err_msg[] = {
 	"socket create failed.",
 	"this socket has used by a client or server, cannot bind to an address.",
 	"this socket has used by a client or server, cannot connect to an address.",
-	"this socket has used by a client or server, cannot accpet an address.",
+	"this socket has used by a client or server, cannot accept an address.",
 	"The socket is not connect or has binded to a address",
 
 /// window socket errors
@@ -89,9 +92,12 @@ static int winsock_init()
 
 	return 1;
 }
-static void error_dump()
+static void error_dump(const char *func, int line)
 {
 	int err = WSAGetLastError();
+
+	fprintf(stderr, "error dump %s: %d\n", func, line);
+
 	switch (err)
 	{
 	case 10061:
@@ -110,9 +116,10 @@ static void error_dump()
 	}
 	}
 }
-#elif
-static void error_dump()
+#elif defined(__linux)
+static void error_dump(const char *func, int line)
 {
+	fprintf(stderr, "error dump %s: %d\n", func, line);
 	fprintf(stderr, "could not create socket: %s(%d)\n", strerror(errno), errno);
 }
 #endif
@@ -143,14 +150,14 @@ socket_t socket_new()
 
 	sk->type = __SKT_TYPE_NONE;
 	sk->recv_timeout = -1;
-	sk->accpet_timeout = -1;
+	sk->accept_timeout = -1;
 	sk->socket = 0;
 
 	// get window socket
 	if ((sk->socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
 	{
 		socket_delete(sk);
-		error_dump();
+		error_dump(__func__, __LINE__);
 		SET_ERROR(SOCKET_CREATE_FAILED);
 		return NULL;
 	}
@@ -164,9 +171,10 @@ socket_t socket_new()
 
 void socket_delete(socket_t sk)
 {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-	if (sk && sk->type != __SKT_TYPE_SERVER_CLIENT)
+
+	if (sk && sk->type != __SKT_TYPE_SERVER_CLIENT) // TODO should we close this type of socket?
 	{
+	#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
 		closesocket(sk->socket);
 		if (winsock_count > 0)
 		{
@@ -176,8 +184,12 @@ void socket_delete(socket_t sk)
 				winsock_inited = 0;
 			}
 		}
+	#elif defined(__linux)
+		printf("close socket\n");
+		close(sk->socket);
+	#endif
 	}
-#endif
+
 	free(sk);
 	sk = NULL;
 }
@@ -193,6 +205,15 @@ int socket_bind(socket_t sock, const char *ip, uint16_t port)
 		return -1;
 	}
 
+	int option = 1;
+
+	// in linux
+	if (setsockopt(sock->socket, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option)) < 0)
+	{
+		error_dump(__func__, __LINE__);
+		return -1;
+	}
+
 	sock->addr.sin_addr.s_addr = inet_addr(ip);
 	sock->addr.sin_family = AF_INET;
 	sock->addr.sin_port = htons(port);
@@ -200,7 +221,7 @@ int socket_bind(socket_t sock, const char *ip, uint16_t port)
 	if (bind(sock->socket, (struct sockaddr *)&sock->addr,
 			 sizeof(sock->addr)) == SOCKET_ERROR)
 	{
-		error_dump();
+		error_dump(__func__, __LINE__);
 		return -1;
 	}
 
@@ -227,7 +248,7 @@ int socket_connect(socket_t sock, const char *ip, uint16_t port)
 	if (connect(sock->socket, (struct sockaddr *)&sock->addr,
 				sizeof(sock->addr)) < 0)
 	{
-		error_dump();
+		error_dump(__func__, __LINE__);
 		return -1;
 	}
 
@@ -249,7 +270,7 @@ int socket_send(socket_t sock, const uint8_t *data, size_t size)
 
 	if (send(sock->socket, data, size, 0) < 0)
 	{
-		error_dump();
+		error_dump(__func__, __LINE__);
 		return -1;
 	}
 
@@ -276,7 +297,7 @@ int socket_recv(socket_t sock, uint8_t *buff, size_t size)
 	{
 		if ((rc = recv(sock->socket, buff, size, 0)) == SOCKET_ERROR)
 		{
-			error_dump();
+			error_dump(__func__, __LINE__);
 			return -1;
 		}
 	}
@@ -299,7 +320,7 @@ int socket_recv(socket_t sock, uint8_t *buff, size_t size)
 		}
 		if (rc < 0)
 		{
-			error_dump();
+			error_dump(__func__, __LINE__);
 			return -1;
 		}
 	}
@@ -327,7 +348,7 @@ socket_t socket_accept(socket_t sock)
 		return NULL;
 	}
 
-	if (sock->accpet_timeout < 0)
+	if (sock->accept_timeout < 0)
 	{
 	__accept:
 	{
@@ -335,7 +356,7 @@ socket_t socket_accept(socket_t sock)
 		cln.socket = accept(sock->socket, (struct sockaddr *)&cln.addr, &c);
 		if (cln.socket == INVALID_SOCKET)
 		{
-			error_dump();
+			error_dump(__func__, __LINE__);
 			return NULL;
 		}
 
@@ -355,8 +376,8 @@ socket_t socket_accept(socket_t sock)
 		TIMEVAL tv;
 		FD_ZERO(&fds);
 
-		tv.tv_sec = sock->recv_timeout / 1000;
-		tv.tv_usec = sock->recv_timeout % 1000 * 1000;
+		tv.tv_sec = sock->accept_timeout / 1000;
+		tv.tv_usec = sock->accept_timeout % 1000 * 1000;
 		FD_SET(sock->socket, &fds);
 
 		// TODO select < 0(-1): error
@@ -367,7 +388,7 @@ socket_t socket_accept(socket_t sock)
 		}
 		if (c < 0)
 		{
-			error_dump();
+			error_dump(__func__, __LINE__);
 			return NULL;
 		}
 	}

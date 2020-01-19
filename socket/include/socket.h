@@ -23,7 +23,7 @@ extern "C"
 
 typedef struct socket
 {
-	int accpet_timeout; // ms
+	int accept_timeout; // ms
 	int recv_timeout; // ms
 
 	// private
