@@ -19,34 +19,34 @@
 #ifdef __cplusplus
 extern "C"
 {
-	#endif
+#endif
 
-	typedef struct socket
-	{
-		int accpet_timeout; // ms
-		int recv_timeout; // ms
+typedef struct socket
+{
+	int accpet_timeout; // ms
+	int recv_timeout; // ms
 
-		// private
-		struct sockaddr_in addr;
-		SOCKET socket;
-		int type;
-	} *socket_t;
+	// private
+	struct sockaddr_in addr;
+	SOCKET socket;
+	int type;
+} *socket_t;
 
-	socket_t socket_new();
-	void socket_delete(socket_t sock);
-	int socket_connect(socket_t client, const char* ip, uint16_t port);
-	int socket_send(socket_t sock, const uint8_t* data, size_t size);
-	int socket_recv(socket_t sock, uint8_t* buff, size_t size);
-	int socket_bind(socket_t server, const char* ip, uint16_t port);
-	int socket_listen(socket_t server, int backlog);
-	socket_t socket_accept(socket_t server);
-	//
-	const char* socket_get_ip(socket_t sock);
-	const uint16_t socket_get_port(socket_t sock);
-	//
-	int socket_errno();
-	const char* socket_errmsg(int err);
+socket_t socket_new();
+void socket_delete(socket_t sock);
+int socket_connect(socket_t client, const char* ip, uint16_t port);
+int socket_send(socket_t sock, const uint8_t* data, size_t size);
+int socket_recv(socket_t sock, uint8_t* buff, size_t size);
+int socket_bind(socket_t server, const char* ip, uint16_t port);
+int socket_listen(socket_t server, int backlog);
+socket_t socket_accept(socket_t server);
+//
+const char* socket_get_ip(socket_t sock);
+const uint16_t socket_get_port(socket_t sock);
+//
+int socket_errno();
+const char* socket_errmsg(int err);
 
-	#ifdef __cplusplus
+#ifdef __cplusplus
 }
 #endif
