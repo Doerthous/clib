@@ -1,4 +1,6 @@
-﻿
+﻿#ifndef SOCKET_H_
+#define SOCKET_H_
+
 #include <stdint.h>
 
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
@@ -50,3 +52,5 @@ const char* socket_errmsg(int err);
 #ifdef __cplusplus
 }
 #endif
+
+#endif // SOCKET_H_
