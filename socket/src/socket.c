@@ -67,13 +67,40 @@ enum
 
 int socket_errno()
 {
-	return __socket_errno;
+#if defined(__linux)
+	return errno;
+#else
+	return WSAGetLastError();
+#endif
 }
 const char *socket_errmsg(int err)
 {
-	assert(0 <= err && err <= __SKT_ERR_CNT);
-	return __socket_err_msg[err];
+#if defined(__linux)
+	return strerror(errno);
+#else
+	static char buffer[256];
+
+	memset(buffer, 0, 256);
+	if (FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+		NULL, err, 0, buffer, 256, NULL) == 0)
+	{
+		// Failed in translating the error.
+		return buffer;
+	}
+
+	//wcstombs(buffer, wideStr, 500); // no test
+
+	printf("%s", buffer);
+	
+	return buffer;
+#endif
 }
+static void error_dump(const char *func, int line)
+{
+	int err = socket_errno();
+	fprintf(stderr, "%s: %d, %d, %s\n", func, line, err, socket_errmsg(err));
+}
+
 
 // winsock init
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
@@ -92,37 +119,22 @@ static int winsock_init()
 
 	return 1;
 }
-static void error_dump(const char *func, int line)
+static int close(SOCKET s)
 {
-	int err = WSAGetLastError();
-
-	fprintf(stderr, "error dump %s: %d\n", func, line);
-
-	switch (err)
+	int ret = closesocket(s);
+	if (winsock_count > 0)
 	{
-	case 10061:
-	{
-		SET_ERROR(WIN_WSA_CONNECT_REFUSED);
+		if (--winsock_count == 0)
+		{
+			WSACleanup();
+			winsock_inited = 0;
+		}
 	}
-	break;
-	case 10054:
-	{
-		SET_ERROR(WIN_REMOTE_SOCK_CLOSED);
-	}
-	break;
-	default:
-	{
-		fprintf(stderr, "wsa error code: %d\n", WSAGetLastError());
-	}
-	}
-}
-#elif defined(__linux)
-static void error_dump(const char *func, int line)
-{
-	fprintf(stderr, "error dump %s: %d\n", func, line);
-	fprintf(stderr, "could not create socket: %s(%d)\n", strerror(errno), errno);
+	return ret;
 }
 #endif
+
+
 
 // socket interfaces
 socket_t socket_new()
@@ -133,6 +145,7 @@ socket_t socket_new()
 	{
 		if (!winsock_init())
 		{
+			winsock_inited = 0;
 			return NULL;
 		}
 
@@ -172,22 +185,9 @@ socket_t socket_new()
 void socket_delete(socket_t sk)
 {
 
-	if (sk && sk->type != __SKT_TYPE_SERVER_CLIENT) // TODO should we close this type of socket?
+	if (sk)// && sk->type != __SKT_TYPE_SERVER_CLIENT) // TODO should we close this type of socket?
 	{
-	#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__WIN32__)
-		closesocket(sk->socket);
-		if (winsock_count > 0)
-		{
-			if (--winsock_count == 0)
-			{
-				WSACleanup();
-				winsock_inited = 0;
-			}
-		}
-	#elif defined(__linux)
-		printf("close socket\n");
 		close(sk->socket);
-	#endif
 	}
 
 	free(sk);
@@ -205,10 +205,9 @@ int socket_bind(socket_t sock, const char *ip, uint16_t port)
 		return -1;
 	}
 
-	int option = 1;
-
 	// in linux
-	if (setsockopt(sock->socket, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option)) < 0)
+	int option = 1;
+	if (setsockopt(sock->socket, SOL_SOCKET, SO_REUSEADDR, (const void *)&option, sizeof(option)) < 0)
 	{
 		error_dump(__func__, __LINE__);
 		return -1;
@@ -218,8 +217,7 @@ int socket_bind(socket_t sock, const char *ip, uint16_t port)
 	sock->addr.sin_family = AF_INET;
 	sock->addr.sin_port = htons(port);
 
-	if (bind(sock->socket, (struct sockaddr *)&sock->addr,
-			 sizeof(sock->addr)) == SOCKET_ERROR)
+	if (bind(sock->socket, (struct sockaddr *)&sock->addr, sizeof(sock->addr)) == SOCKET_ERROR)
 	{
 		error_dump(__func__, __LINE__);
 		return -1;
